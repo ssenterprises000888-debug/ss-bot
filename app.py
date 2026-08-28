@@ -15,7 +15,7 @@ from google.genai import types
 BOT_TOKEN = "8768428239:AAHpNjXHdvtz8vybglg2R9tSvv0uiyQ_tNA"
 ADMIN_CHAT_ID = 1443007174  # Satish Prasad Ji (Admin Telegram ID)
 
-# Google AI Studio se copy ki hui poori API Key yahan paste karein:
+# Verified Google Gemini API Key
 GEMINI_API_KEY = "AQ.Ab8RN6JJr7_sEO6g9V11fkUgBCmm12MWuGZVkU74vcQy6WPY8g"
 
 # Business Information & Contacts
@@ -42,9 +42,9 @@ def get_system_prompt():
     You are the Senior AI Business Assistant for 'SS Enterprises' managed by Satish Prasad.
     
     Services Offered:
-    1. Electrical & Inverter Repair/Installation
-    2. CCTV Camera Sales, Setup & Service
-    3. Computer, Laptop & Printer Repair & Sales
+    1. Electrical & Inverter Solutions (Fan, Wiring, Inverter, Switchboard, Motor)
+    2. CCTV Camera Setup & Repair (Hikvision, CP Plus, Dahua, IP Camera, DVR/NVR)
+    3. Computer, Laptop & Printer Repair/Sales (Windows, Formatting, Hardware, Cartridge)
     4. Intercom & Biometric Attendance Systems
 
     Shop Details:
@@ -52,17 +52,17 @@ def get_system_prompt():
     - Timing: {BUSINESS_CONTEXT['timing']}
     - Technician Contacts: {json.dumps(BUSINESS_CONTEXT['technicians'])}
 
-    ROLES & INSTRUCTIONS:
+    ROLES & BEHAVIOR:
     1. FOR CUSTOMERS:
-       - Reply in respectful, friendly Hindi/Hinglish (Sir/Ma'am).
-       - Solve basic queries or understand what is damaged/needed.
-       - Politely collect Name, Mobile Number, Address, and Preferred Time.
-       - Provide the relevant technician/senior phone number.
-       - Once complete details (Name, Phone, Address, Issue) are known, append strictly this hidden tag at the END of response:
+       - Talk in respectful, polite Hindi/Hinglish (Sir/Ma'am).
+       - Understand what is damaged or required.
+       - Politely collect: Name, Mobile Number, Address/Location, and Preferred Visit Time.
+       - Share the correct department technician/senior number.
+       - Once complete details (Name, Phone, Address, Time, Issue) are provided, append strictly this hidden tag at the END of response:
          <!--LEAD_JSON: {{"name": "...", "phone": "...", "address": "...", "time": "...", "issue": "..."}}-->
 
-    2. FOR EMPLOYEES:
-       - If a technician gives a job update (e.g., "Kamothe site done, bill 1500"), acknowledge and append:
+    2. FOR EMPLOYEES / TECHNICIANS:
+       - If a technician gives a task or site update (e.g. "Kamothe site complete, payment ₹1500 done"), acknowledge politely and append:
          <!--STAFF_UPDATE: {{"staff_msg": "..."}}-->
     """
 
@@ -70,9 +70,11 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id == ADMIN_CHAT_ID:
         await update.message.reply_text(
-            "👑 **Namaste Satish Ji (Gemini AI Admin Active)**\n\n"
-            "AI ab customers ke sath natural baat karega aur details collect karke aapko instant ticket bhejega.\n"
-            "• `/broadcast <message>` - Sabhi customers ko offer ya wish bhejne ke liye.",
+            "👑 **Namaste Satish Ji (AI Admin Desk Active)**\n\n"
+            "Gemini AI active hai aur teeno roles handle karega:\n"
+            "1. **Customer:** Inquiries & Auto-Leads\n"
+            "2. **Employee:** Work & payment updates\n"
+            "3. **Admin/Broadcast:** `/broadcast <message>` se sabhi customers ko offer bhejein.",
             parse_mode='Markdown'
         )
     else:
@@ -83,11 +85,12 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• CCTV Camera Setup & Repair\n"
             "• Electrical & Inverter Solutions\n"
             "• Computer, Laptop & Printer Repair/Sales\n"
-            "• Intercom & Biometric Attendance\n\n"
+            "• Intercom & Biometric Attendance Machine\n\n"
             "👉 *Aap bataiye aapki kya problem ya requirement hai?*"
         )
         await update.message.reply_text(welcome_text, parse_mode='Markdown')
 
+# Role 1: Admin Broadcast Feature
 async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_CHAT_ID:
         return
@@ -99,12 +102,13 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     count = 0
     for uid in CUSTOMER_LEADS:
         try:
-            await context.bot.send_message(chat_id=uid, text=f"📢 **Special Update - SS Enterprises**\n\n{msg}", parse_mode='Markdown')
+            await context.bot.send_message(chat_id=uid, text=f"📢 **Special Offer - SS Enterprises**\n\n{msg}", parse_mode='Markdown')
             count += 1
         except Exception:
             pass
-    await update.message.reply_text(f"✅ Broadcast {count} customers ko bhej diya gaya.")
+    await update.message.reply_text(f"✅ Broadcast {count} customers ko successfully bhej diya gaya.")
 
+# Core AI Message Handler
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_text = update.message.text
@@ -112,16 +116,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = ai_client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-1.5-flash",
             contents=user_text,
             config=types.GenerateContentConfig(
                 system_instruction=get_system_prompt(),
-                temperature=0.6
+                temperature=0.7
             )
         )
         bot_reply = response.text
 
-        # Hidden Lead JSON Parsing
+        # Role 2: Customer Lead Extraction & Instant Admin Alert
         if "<!--LEAD_JSON:" in bot_reply:
             parts = bot_reply.split("<!--LEAD_JSON:")
             clean_reply = parts[0].strip()
@@ -142,9 +146,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=alert_text, parse_mode='Markdown')
             except Exception as e:
-                print(f"Lead JSON Error: {e}")
+                print(f"Lead JSON Parse Error: {e}")
 
-        # Hidden Staff Update Parsing
+        # Role 3: Employee/Technician Work Report Alert
         elif "<!--STAFF_UPDATE:" in bot_reply:
             parts = bot_reply.split("<!--STAFF_UPDATE:")
             clean_reply = parts[0].strip()
@@ -155,8 +159,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(bot_reply, parse_mode='Markdown')
 
     except Exception as e:
-        print(f"Gemini API Error: {e}")
-        await update.message.reply_text("Namaste sir, aapki request note ho gayi hai. Hamari team jaldi aapse sampark karegi.")
+        print(f"Gemini API Call Error: {e}")
+        await update.message.reply_text(
+            "Namaste sir, aapki request note kar li gayi hai. Hamare senior technician jaldi hi aapse direct baat karenge.\n"
+            f"Emergency Helpline: `{BUSINESS_CONTEXT['technicians']['boss_helpline']}`",
+            parse_mode='Markdown'
+        )
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -164,7 +172,7 @@ def main():
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("Google Gemini AI SS Enterprises Bot Running...")
+    print("Gemini AI SS Enterprises Bot is Active & Running...")
     app.run_polling()
 
 if __name__ == '__main__':
