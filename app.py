@@ -16,7 +16,7 @@ BOT_TOKEN = "8768428239:AAHpNjXHdvtz8vybglg2R9tSvv0uiyQ_tNA"
 ADMIN_CHAT_ID = 1443007174  # Satish Prasad Ji (Admin Telegram ID)
 
 # Google AI Studio se copy ki hui poori API Key yahan paste karein:
-GEMINI_API_KEY = "PASTE_YOUR_FULL_COPIED_KEY_HERE"
+GEMINI_API_KEY = "AQ.Ab8RN6JJr7_sEO6g9V11fkUgBCmm12MWuGZVkU74vcQy6WPY8g"
 
 # Business Information & Contacts
 BUSINESS_CONTEXT = {
