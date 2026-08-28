@@ -1,5 +1,6 @@
 import json
 import logging
+import aiohttp
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -8,8 +9,6 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
-from google import genai
-from google.genai import types
 
 # ==================== CONFIGURATION (SS ENTERPRISES) ====================
 BOT_TOKEN = "8768428239:AAHpNjXHdvtz8vybglg2R9tSvv0uiyQ_tNA"
@@ -34,8 +33,9 @@ BUSINESS_CONTEXT = {
     }
 }
 
+# In-Memory Customer History and Leads
+CHAT_HISTORIES = {}
 CUSTOMER_LEADS = set()
-ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 def get_system_prompt():
     return f"""
@@ -52,29 +52,66 @@ def get_system_prompt():
     - Timing: {BUSINESS_CONTEXT['timing']}
     - Technician Contacts: {json.dumps(BUSINESS_CONTEXT['technicians'])}
 
-    ROLES & BEHAVIOR:
+    ROLES & INSTRUCTIONS:
     1. FOR CUSTOMERS:
-       - Talk in respectful, polite Hindi/Hinglish (Sir/Ma'am).
-       - Understand what is damaged or required.
-       - Politely collect: Name, Mobile Number, Address/Location, and Preferred Visit Time.
-       - Share the correct department technician/senior number.
-       - Once complete details (Name, Phone, Address, Time, Issue) are provided, append strictly this hidden tag at the END of response:
+       - Talk in respectful, natural Hindi/Hinglish (Sir/Ma'am).
+       - When a customer mentions a problem (e.g. camera lagwana hai, fan kharab hai), acknowledge politely.
+       - Politely ask for missing details: Name, Mobile Number, Address/Location, and Preferred Visit Time (ask step-by-step or together).
+       - When you give the technician number, or once customer provides full details (Name, Phone, Address, Time, Issue), append strictly this hidden tag at the VERY END:
          <!--LEAD_JSON: {{"name": "...", "phone": "...", "address": "...", "time": "...", "issue": "..."}}-->
 
     2. FOR EMPLOYEES / TECHNICIANS:
-       - If a technician gives a task or site update (e.g. "Kamothe site complete, payment ₹1500 done"), acknowledge politely and append:
+       - If a technician gives a task or site update (e.g. "Kamothe site complete, payment 1500"), acknowledge and append:
          <!--STAFF_UPDATE: {{"staff_msg": "..."}}-->
     """
 
+# Direct Call to Google Gemini REST API
+async def call_gemini_api(user_id: int, user_text: str) -> str:
+    if user_id not in CHAT_HISTORIES:
+        CHAT_HISTORIES[user_id] = []
+    
+    CHAT_HISTORIES[user_id].append({"role": "user", "parts": [{"text": user_text}]})
+    
+    # Keep last 10 messages for context memory
+    if len(CHAT_HISTORIES[user_id]) > 10:
+        CHAT_HISTORIES[user_id] = CHAT_HISTORIES[user_id][-10:]
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    
+    payload = {
+        "system_instruction": {
+            "parts": [{"text": get_system_prompt()}]
+        },
+        "contents": CHAT_HISTORIES[user_id],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 800
+        }
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                bot_reply = data['candidates'][0]['content']['parts'][0]['text']
+                CHAT_HISTORIES[user_id].append({"role": "model", "parts": [{"text": bot_reply}]})
+                return bot_reply
+            else:
+                error_body = await resp.text()
+                print(f"Gemini API Error [{resp.status}]: {error_body}")
+                return "Namaste sir, aapki request note ho gayi hai. Kripya apna Naam, Phone number aur Address share karein taaki hum technician bhej sakein."
+
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    CHAT_HISTORIES[user_id] = []  # Reset chat history
+    
     if user_id == ADMIN_CHAT_ID:
         await update.message.reply_text(
             "👑 **Namaste Satish Ji (AI Admin Desk Active)**\n\n"
             "Gemini AI active hai aur teeno roles handle karega:\n"
-            "1. **Customer:** Inquiries & Auto-Leads\n"
-            "2. **Employee:** Work & payment updates\n"
-            "3. **Admin/Broadcast:** `/broadcast <message>` se sabhi customers ko offer bhejein.",
+            "1. **Customer:** Inquiries & Lead capture\n"
+            "2. **Employee:** Work updates\n"
+            "3. **Broadcast:** `/broadcast <message>`",
             parse_mode='Markdown'
         )
     else:
@@ -85,12 +122,11 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• CCTV Camera Setup & Repair\n"
             "• Electrical & Inverter Solutions\n"
             "• Computer, Laptop & Printer Repair/Sales\n"
-            "• Intercom & Biometric Attendance Machine\n\n"
-            "👉 *Aap bataiye aapki kya problem ya requirement hai?*"
+            "• Intercom & Biometric Attendance\n\n"
+            "👉 *Aap bataiye aapki kya requirement ya problem hai?*"
         )
         await update.message.reply_text(welcome_text, parse_mode='Markdown')
 
-# Role 1: Admin Broadcast Feature
 async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_CHAT_ID:
         return
@@ -102,69 +138,51 @@ async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     count = 0
     for uid in CUSTOMER_LEADS:
         try:
-            await context.bot.send_message(chat_id=uid, text=f"📢 **Special Offer - SS Enterprises**\n\n{msg}", parse_mode='Markdown')
+            await context.bot.send_message(chat_id=uid, text=f"📢 **Special Update - SS Enterprises**\n\n{msg}", parse_mode='Markdown')
             count += 1
         except Exception:
             pass
     await update.message.reply_text(f"✅ Broadcast {count} customers ko successfully bhej diya gaya.")
 
-# Core AI Message Handler
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_text = update.message.text
     CUSTOMER_LEADS.add(user_id)
 
-    try:
-        response = ai_client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=user_text,
-            config=types.GenerateContentConfig(
-                system_instruction=get_system_prompt(),
-                temperature=0.7
+    bot_reply = await call_gemini_api(user_id, user_text)
+
+    # 1. Check Lead JSON for Admin Alert Ticket
+    if "<!--LEAD_JSON:" in bot_reply:
+        parts = bot_reply.split("<!--LEAD_JSON:")
+        clean_reply = parts[0].strip()
+        lead_json_str = parts[1].split("-->")[0].strip()
+        
+        await update.message.reply_text(clean_reply, parse_mode='Markdown')
+        try:
+            lead_data = json.loads(lead_json_str)
+            alert_text = (
+                "🔔 **AI GENERATED CUSTOMER LEAD**\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 **Name:** {lead_data.get('name', 'N/A')}\n"
+                f"📞 **Phone:** {lead_data.get('phone', 'N/A')}\n"
+                f"📍 **Address:** {lead_data.get('address', 'N/A')}\n"
+                f"⏰ **Time:** {lead_data.get('time', 'N/A')}\n"
+                f"📝 **Requirement:** {lead_data.get('issue', 'N/A')}\n"
+                "━━━━━━━━━━━━━━━━━━━━"
             )
-        )
-        bot_reply = response.text
+            await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=alert_text, parse_mode='Markdown')
+        except Exception as e:
+            print(f"JSON Parse Error: {e}")
 
-        # Role 2: Customer Lead Extraction & Instant Admin Alert
-        if "<!--LEAD_JSON:" in bot_reply:
-            parts = bot_reply.split("<!--LEAD_JSON:")
-            clean_reply = parts[0].strip()
-            lead_json_str = parts[1].split("-->")[0].strip()
-            
-            await update.message.reply_text(clean_reply, parse_mode='Markdown')
-            try:
-                lead_data = json.loads(lead_json_str)
-                alert_text = (
-                    "🔔 **AI GENERATED CUSTOMER LEAD**\n"
-                    "━━━━━━━━━━━━━━━━━━━━\n"
-                    f"👤 **Name:** {lead_data.get('name')}\n"
-                    f"📞 **Phone:** {lead_data.get('phone')}\n"
-                    f"📍 **Address:** {lead_data.get('address')}\n"
-                    f"⏰ **Time:** {lead_data.get('time')}\n"
-                    f"📝 **Requirement:** {lead_data.get('issue')}\n"
-                    "━━━━━━━━━━━━━━━━━━━━"
-                )
-                await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=alert_text, parse_mode='Markdown')
-            except Exception as e:
-                print(f"Lead JSON Parse Error: {e}")
-
-        # Role 3: Employee/Technician Work Report Alert
-        elif "<!--STAFF_UPDATE:" in bot_reply:
-            parts = bot_reply.split("<!--STAFF_UPDATE:")
-            clean_reply = parts[0].strip()
-            staff_str = parts[1].split("-->")[0].strip()
-            await update.message.reply_text(clean_reply)
-            await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"👷 **STAFF WORK UPDATE:**\n{staff_str}")
-        else:
-            await update.message.reply_text(bot_reply, parse_mode='Markdown')
-
-    except Exception as e:
-        print(f"Gemini API Call Error: {e}")
-        await update.message.reply_text(
-            "Namaste sir, aapki request note kar li gayi hai. Hamare senior technician jaldi hi aapse direct baat karenge.\n"
-            f"Emergency Helpline: `{BUSINESS_CONTEXT['technicians']['boss_helpline']}`",
-            parse_mode='Markdown'
-        )
+    # 2. Check Staff Work Update
+    elif "<!--STAFF_UPDATE:" in bot_reply:
+        parts = bot_reply.split("<!--STAFF_UPDATE:")
+        clean_reply = parts[0].strip()
+        staff_str = parts[1].split("-->")[0].strip()
+        await update.message.reply_text(clean_reply)
+        await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"👷 **STAFF WORK UPDATE:**\n{staff_str}")
+    else:
+        await update.message.reply_text(bot_reply, parse_mode='Markdown')
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -172,7 +190,7 @@ def main():
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("Gemini AI SS Enterprises Bot is Active & Running...")
+    print("Gemini AI SS Enterprises Bot Active & Running...")
     app.run_polling()
 
 if __name__ == '__main__':
