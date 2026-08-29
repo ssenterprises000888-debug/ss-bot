@@ -1,9 +1,10 @@
 import os
-import json
-import logging
 import re
+import logging
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any
+from threading import Thread
+from flask import Flask
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -32,6 +33,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# --- Render Web Server Fix ---
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def home():
+    return "SS Enterprises Bot is Live & Running!"
+
+def run_flask():
+    port = int(os.environ.get('PORT', 8080))
+    web_app.run(host='0.0.0.0', port=port)
+# -----------------------------
+
 # Database (in-memory)
 user_data_store = {}
 
@@ -49,7 +62,6 @@ class DeepSeekBot:
         self.gemini_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
     
     async def ask_gemini(self, user_message: str, conversation_history: list = None) -> str:
-        """Send message to Gemini AI and get response"""
         headers = {
             "x-goog-api-key": GEMINI_API_KEY,
             "Content-Type": "application/json"
@@ -80,25 +92,18 @@ class DeepSeekBot:
             return "क्षमा करें, मुझे कुछ तकनीकी समस्या हो रही है। कृपया थोड़ी देर बाद प्रयास करें।"
     
     async def extract_details(self, user_message: str) -> Dict[str, Any]:
-        """Extract customer details from conversation"""
         details = {}
-        
-        # Check for mobile number (10 digits)
         phone_match = re.search(r'\b\d{10}\b', user_message)
         if phone_match:
             details['phone'] = phone_match.group()
-        
-        # Check for name
         if 'my name is' in user_message.lower():
             name_start = user_message.lower().find('my name is') + 10
             details['name'] = user_message[name_start:].strip()
         elif 'name' in user_message.lower() and len(user_message.split()) < 5:
             details['name'] = user_message.strip()
-        
         return details
     
     async def generate_lead_ticket(self, user_id: int, details: Dict, username: str = None) -> str:
-        """Generate formatted lead ticket for admin"""
         ticket = f"""
 📋 *NEW LEAD - SS Enterprises*
 ━━━━━━━━━━━━━━━━━━
@@ -115,16 +120,12 @@ class DeepSeekBot:
 """
         return ticket
 
-# Initialize bot
 deepseek = DeepSeekBot()
 
-# Command Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
     user_id = update.effective_user.id
     username = update.effective_user.username or "User"
     
-    # Check if admin
     if user_id == ADMIN_CHAT_ID:
         keyboard = [
             [InlineKeyboardButton("📢 Broadcast Message", callback_data='broadcast')],
@@ -145,7 +146,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
     else:
-        # Initialize customer session
         if user_id not in user_data_store:
             user_data_store[user_id] = {
                 'role': 'customer',
@@ -155,7 +155,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'username': username
             }
         
-        # Get AI greeting
         greeting = await deepseek.ask_gemini(
             "Start a new conversation with a customer. Greet them warmly and ask for their name.",
             []
@@ -169,7 +168,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle broadcast command (admin only)"""
     user_id = update.effective_user.id
     
     if user_id != ADMIN_CHAT_ID:
@@ -186,8 +184,6 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     message = ' '.join(context.args)
-    
-    # Get all customers (excluding admin)
     customers = [uid for uid in user_data_store.keys() if uid != ADMIN_CHAT_ID]
     
     if not customers:
@@ -213,11 +209,9 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all incoming messages"""
     user_id = update.effective_user.id
     user_message = update.message.text
     
-    # Handle admin commands
     if user_id == ADMIN_CHAT_ID:
         if user_message.startswith('/broadcast'):
             return
@@ -227,7 +221,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
     
-    # Initialize user data if not exists
     if user_id not in user_data_store:
         user_data_store[user_id] = {
             'role': 'customer',
@@ -238,46 +231,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
     
     user_data = user_data_store[user_id]
-    
-    # Get AI response
     conversation_history = user_data['conversation']
     ai_response = await deepseek.ask_gemini(user_message, conversation_history)
     
-    # Store conversation
     conversation_history.append({"role": "user", "parts": [{"text": user_message}]})
     conversation_history.append({"role": "assistant", "parts": [{"text": ai_response}]})
     
-    # Extract details
     extracted = await deepseek.extract_details(user_message)
-    
-    # Update customer details
     if extracted:
         user_data['details'].update(extracted)
     
-    # Check for address and time in message
     if 'address' in user_message.lower() or 'house' in user_message.lower() or 'street' in user_message.lower():
         user_data['details']['address'] = user_message.strip()
     if 'time' in user_message.lower() or 'am' in user_message.lower() or 'pm' in user_message.lower() or 'clock' in user_message.lower():
         user_data['details']['time'] = user_message.strip()
     
-    # Check if all details are collected
     required_fields = ['name', 'phone', 'address', 'time']
     if all(field in user_data['details'] for field in required_fields):
-        # Generate lead ticket
         ticket = await deepseek.generate_lead_ticket(
             user_id, 
             user_data['details'],
             user_data.get('username')
         )
         
-        # Send to admin
         await context.bot.send_message(
             chat_id=ADMIN_CHAT_ID,
             text=ticket,
             parse_mode='Markdown'
         )
         
-        # Send technician number to customer
         await update.message.reply_text(
             f"✅ *धन्यवाद!* आपकी details सफलतापूर्वक प्राप्त हो गईं।\n\n"
             f"📞 *Our Technician:* +91-XXXXXXXXXX\n"
@@ -287,18 +269,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
         
-        # Reset conversation
         user_data['stage'] = 'completed'
         user_data['details'] = {}
         user_data['conversation'] = []
-        
         return
     
-    # Send AI response
     await update.message.reply_text(ai_response)
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle button callbacks"""
     query = update.callback_query
     await query.answer()
     
@@ -317,7 +295,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "`/broadcast Happy New Year to all customers!`",
             parse_mode='Markdown'
         )
-    
     elif query.data == 'view_leads':
         await query.edit_message_text(
             "📊 *Leads Dashboard*\n\n"
@@ -325,7 +302,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Active Users: {len([u for u in user_data_store.values() if u.get('stage') != 'completed'])}\n\n"
             "📌 Use /start for main menu"
         )
-    
     elif query.data == 'view_customers':
         customers = [uid for uid in user_data_store.keys() if uid != ADMIN_CHAT_ID]
         await query.edit_message_text(
@@ -336,11 +312,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Log errors"""
     logger.error(f"Update {update} caused error {context.error}")
 
 def main():
-    """Start the bot"""
+    # Flask web server ko background thread me start karein
+    flask_thread = Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # Telegram Bot start karein
     application = Application.builder().token(BOT_TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
@@ -349,7 +328,7 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_error_handler(error_handler)
     
-    print("🤖 DeepSeek Bot is starting...")
+    print("🤖 SS Enterprises Bot is starting...")
     print(f"🔑 Admin ID: {ADMIN_CHAT_ID}")
     print("✅ Bot is ready!")
     
@@ -357,3 +336,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+    
