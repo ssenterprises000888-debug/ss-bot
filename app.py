@@ -18,10 +18,9 @@ from telegram.ext import (
 import aiohttp
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-# --- 1. Clean Configuration (Auto-fix for empty or quoted tokens) ---
+# Configuration
 raw_bot_token = os.getenv('BOT_TOKEN') or '8768428239:AAHpNjXHdvtz8vybglg2R9tSvv0uiyQ_tNA'
 BOT_TOKEN = raw_bot_token.strip().strip('"').strip("'")
 
@@ -31,29 +30,28 @@ ADMIN_CHAT_ID = int(str(raw_admin_id).strip().strip('"').strip("'"))
 raw_gemini_key = os.getenv('GEMINI_API_KEY') or 'AQ.Ab8RN6JJr7_sEO6g9V11fkUgBCmm12MWuGZVkU74vcQy6WPY8g'
 GEMINI_API_KEY = raw_gemini_key.strip().strip('"').strip("'")
 
-# --- 2. Logging Setup ---
+# Logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- 3. Render Web Server (Port Binding Fix) ---
+# Render Port Binding Server
 web_app = Flask(__name__)
 
 @web_app.route('/')
 @web_app.route('/health')
 def home():
-    return "SS Enterprises Telegram Bot is Live and Healthy!"
+    return "Bot is Live and running on Render!"
 
-def start_web_server():
+def run_web_server():
     port = int(os.environ.get('PORT', 10000))
     web_app.run(host='0.0.0.0', port=port, use_reloader=False)
 
-# --- 4. Database (In-Memory) ---
+# Database
 user_data_store = {}
 
-# --- 5. AI System Prompt ---
 SYSTEM_PROMPT = """You are Deepak, a helpful assistant at SS Enterprises - a service shop in India that provides CCTV installation, electrical work, computer/laptop repair, and intercom services. 
 You speak in Hinglish (Hindi + English) and are polite and professional.
 Your goal is to collect customer details: Name, Mobile Number, Address, and Preferred Time for service.
@@ -127,7 +125,6 @@ class DeepSeekBot:
 
 deepseek = DeepSeekBot()
 
-# --- 6. Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or "User"
@@ -320,13 +317,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update {update} caused error {context.error}")
 
-# --- 7. Main Execution ---
 def main():
-    # Start web server thread for Render port detection
-    server_thread = Thread(target=start_web_server, daemon=True)
+    # Background Flask server for Render Port Detection
+    server_thread = Thread(target=run_web_server, daemon=True)
     server_thread.start()
     
-    # Build Telegram Bot
+    # Telegram Application
     application = Application.builder().token(BOT_TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
@@ -343,4 +339,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-        
