@@ -21,34 +21,39 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Configuration
-BOT_TOKEN = os.getenv('BOT_TOKEN', '8768428239:AAHpNjXHdvtz8vybglg2R9tSvv0uiyQ_tNA')
-ADMIN_CHAT_ID = int(os.getenv('ADMIN_CHAT_ID', '1443007174'))
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', 'AQ.Ab8RN6JJr7_sEO6g9V11fkUgBCmm12MWuGZVkU74vcQy6WPY8g')
+# --- 1. Clean Configuration (Auto-fix for empty or quoted tokens) ---
+raw_bot_token = os.getenv('BOT_TOKEN') or '8768428239:AAHpNjXHdvtz8vybglg2R9tSvv0uiyQ_tNA'
+BOT_TOKEN = raw_bot_token.strip().strip('"').strip("'")
 
-# Enable logging
+raw_admin_id = os.getenv('ADMIN_CHAT_ID') or '1443007174'
+ADMIN_CHAT_ID = int(str(raw_admin_id).strip().strip('"').strip("'"))
+
+raw_gemini_key = os.getenv('GEMINI_API_KEY') or 'AQ.Ab8RN6JJr7_sEO6g9V11fkUgBCmm12MWuGZVkU74vcQy6WPY8g'
+GEMINI_API_KEY = raw_gemini_key.strip().strip('"').strip("'")
+
+# --- 2. Logging Setup ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- Render Web Server Fix ---
+# --- 3. Render Web Server (Port Binding Fix) ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
+@web_app.route('/health')
 def home():
-    return "SS Enterprises Bot is Live & Running!"
+    return "SS Enterprises Telegram Bot is Live and Healthy!"
 
-def run_flask():
-    port = int(os.environ.get('PORT', 8080))
-    web_app.run(host='0.0.0.0', port=port)
-# -----------------------------
+def start_web_server():
+    port = int(os.environ.get('PORT', 10000))
+    web_app.run(host='0.0.0.0', port=port, use_reloader=False)
 
-# Database (in-memory)
+# --- 4. Database (In-Memory) ---
 user_data_store = {}
 
-# AI System Prompt
+# --- 5. AI System Prompt ---
 SYSTEM_PROMPT = """You are Deepak, a helpful assistant at SS Enterprises - a service shop in India that provides CCTV installation, electrical work, computer/laptop repair, and intercom services. 
 You speak in Hinglish (Hindi + English) and are polite and professional.
 Your goal is to collect customer details: Name, Mobile Number, Address, and Preferred Time for service.
@@ -122,6 +127,7 @@ class DeepSeekBot:
 
 deepseek = DeepSeekBot()
 
+# --- 6. Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or "User"
@@ -314,12 +320,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update {update} caused error {context.error}")
 
+# --- 7. Main Execution ---
 def main():
-    # Flask web server ko background thread me start karein
-    flask_thread = Thread(target=run_flask, daemon=True)
-    flask_thread.start()
+    # Start web server thread for Render port detection
+    server_thread = Thread(target=start_web_server, daemon=True)
+    server_thread.start()
     
-    # Telegram Bot start karein
+    # Build Telegram Bot
     application = Application.builder().token(BOT_TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
@@ -336,4 +343,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-    
+        
